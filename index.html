@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>离线音乐播放器 - 支持跨设备分享</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        input[type=range] {
+            -webkit-appearance: none;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #ffffff;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.3);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+        }
+        
+        .bg-animated {
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+            background-size: 400% 400%;
+            animation: gradient 15s ease infinite;
+        }
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-animated min-h-screen flex items-center justify-center text-white font-sans selection:bg-pink-500 selection:text-white p-4">
+
+    <div class="glass p-8 rounded-3xl shadow-2xl w-full max-w-md mx-4 relative overflow-hidden">
+        
+        <canvas id="visualizer" class="absolute bottom-0 left-0 w-full h-1/2 opacity-30 pointer-events-none"></canvas>
+
+        <div class="relative z-10 text-center mb-8">
+            <div class="w-32 h-32 mx-auto bg-gradient-to-tr from-pink-500 to-violet-500 rounded-full shadow-lg flex items-center justify-center mb-4 animate-[spin_10s_linear_infinite]" style="animation-play-state: paused;" id="album-art">
+                <i class="fa-solid fa-music text-4xl text-white"></i>
+            </div>
+            <h2 id="track-name" class="text-2xl font-bold truncate px-4">内置演示音频</h2>
+            <p id="track-artist" class="text-gray-300 text-sm mt-1">本地播放器</p>
+        </div>
+
+        <div class="relative z-10 mb-6">
+            <div class="flex justify-between text-xs text-gray-300 mb-1">
+                <span id="current-time">0:00</span>
+                <span id="duration">0:00</span>
+            </div>
+            <input type="range" id="progress" value="0" class="w-full h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <div class="relative z-10 flex items-center justify-center gap-8 mb-6">
+            <button onclick="document.getElementById('file-upload').click()" class="text-gray-300 hover:text-white transition transform hover:scale-110" title="导入本地 MP3">
+                <i class="fa-solid fa-folder-open text-xl"></i>
+            </button>
+            <input type="file" id="file-upload" accept="audio/*" class="hidden">
+
+            <button id="play-btn" class="w-16 h-16 bg-white text-pink-600 rounded-full flex items-center justify-center shadow-lg hover:bg-gray-100 transition transform hover:scale-105 active:scale-95">
+                <i class="fa-solid fa-play text-2xl ml-1" id="play-icon"></i>
+            </button>
+
+            <button id="restart-btn" class="text-gray-300 hover:text-white transition transform hover:scale-110">
+                <i class="fa-solid fa-rotate-right text-xl"></i>
+            </button>
+        </div>
+
+        <div class="relative z-10 flex items-center justify-center gap-4 mb-6">
+            <button id="share-btn" class="flex-1 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white py-2 px-4 rounded-lg transition transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                <i class="fa-solid fa-share-nodes mr-2"></i>生成分享链接
+            </button>
+            <button id="qrcode-btn" class="flex-1 bg-gradient-to-r from-pink-500 to-orange-500 hover:from-pink-600 hover:to-orange-600 text-white py-2 px-4 rounded-lg transition transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                <i class="fa-solid fa-qrcode mr-2"></i>生成二维码
+            </button>
+        </div>
+
+        <div class="relative z-10 flex items-center justify-center gap-3 px-8">
+            <i class="fa-solid fa-volume-low text-gray-300 text-xs"></i>
+            <input type="range" id="volume" min="0" max="1" step="0.1" value="0.8" class="w-full">
+            <i class="fa-solid fa-volume-high text-gray-300 text-xs"></i>
+        </div>
+
+        <div id="info-box" class="relative z-10 mt-4 p-3 rounded-lg text-xs hidden">
+            <i class="fa-solid fa-circle-info mr-2"></i>
+            <span id="info-text"></span>
+        </div>
+    </div>
+
+    <div id="qrcode-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 p-4">
+        <div class="glass p-8 rounded-3xl shadow-2xl max-w-sm w-full mx-4 relative">
+            <button id="close-modal" class="absolute top-4 right-4 text-white hover:text-gray-300 transition">
+                <i class="fa-solid fa-xmark text-2xl"></i>
+            </button>
+            <h3 class="text-2xl font-bold text-center mb-4">扫码播放音频</h3>
+            <div id="qrcode-container" class="bg-white p-4 rounded-lg mb-4 flex items-center justify-center min-h-[280px]"></div>
+            <p class="text-sm text-center text-gray-300 mb-2">使用微信或浏览器扫描二维码</p>
+            <p class="text-xs text-center text-gray-400 mb-4" id="share-id-display"></p>
+            <div class="flex gap-2">
+                <button id="copy-link-btn" class="flex-1 bg-white text-pink-600 py-2 px-4 rounded-lg hover:bg-gray-100 transition">
+                    <i class="fa-solid fa-copy mr-2"></i>复制链接
+                </button>
+                <button id="download-qr-btn" class="flex-1 bg-gradient-to-r from-green-500 to-teal-500 text-white py-2 px-4 rounded-lg hover:from-green-600 hover:to-teal-600 transition">
+                    <i class="fa-solid fa-download mr-2"></i>下载二维码
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audio-player">
+        <!-- 内置演示音频 -->
+        <source src="data:audio/mp3;base64,//uQxAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAACcQCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA//////////////////////////////////////////////////////////////////8AAAA9TEFNRTMuMTAwA78AAAAAAAAAABQkJAAACAAAAnEAAq1VAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//uQxAAACkQNgAAABAAACExHAAAALSw0QAAAAEAAITDcAAAARAAAqAAAEAAQBAJAAgCAQAA//7kMQAAAp0DUAAAAQAAAhMRwAAAC0sNQAAAAEAAITDcAAAARAAACgAAQABAEAkACAIBAAD/+5DEAAAKZA1AAAAEAAITDcAAAAtLDUAAAABAACEw3AAABEAAAKAAABAEAkACAIBAAD" type="audio/mp3">
+    </audio>
+
+    <script>
+        console.log('🎵 音乐播放器启动中...');
+        
+        // ========== DOM 元素 ==========
+        const audio = document.getElementById('audio-player');
+        const playBtn = document.getElementById('play-btn');
+        const playIcon = document.getElementById('play-icon');
+        const progress = document.getElementById('progress');
+        const volume = document.getElementById('volume');
+        const currentTimeEl = document.getElementById('current-time');
+        const durationEl = document.getElementById('duration');
+        const fileUpload = document.getElementById('file-upload');
+        const trackName = document.getElementById('track-name');
+        const trackArtist = document.getElementById('track-artist');
+        const albumArt = document.getElementById('album-art');
+        const restartBtn = document.getElementById('restart-btn');
+        const shareBtn = document.getElementById('share-btn');
+        const qrcodeBtn = document.getElementById('qrcode-btn');
+        const qrcodeModal = document.getElementById('qrcode-modal');
+        const closeModal = document.getElementById('close-modal');
+        const qrcodeContainer = document.getElementById('qrcode-container');
+        const copyLinkBtn = document.getElementById('copy-link-btn');
+        const downloadQrBtn = document.getElementById('download-qr-btn');
+        const infoBox = document.getElementById('info-box');
+        const infoText = document.getElementById('info-text');
+        const shareIdDisplay = document.getElementById('share-id-display');
+
+        // ========== 状态变量 ==========
+        let currentAudioData = null;
+        let currentFileName = '内置演示音频';
+        let shareUrl = '';
+        let currentShareId = '';
+
+        // 音频上下文
+        let audioContext, analyser, source, isContextSetup = false;
+
+        // ========== 初始化 ==========
+        console.log('✅ 应用初始化完成');
+        checkSharedAudio();
+
+        // ========== 工具函数 ==========
+        function showInfo(message, type = 'info') {
+            console.log('💬', message);
+            infoText.textContent = message;
+            infoBox.className = 'relative z-10 mt-4 p-3 rounded-lg text-xs';
+            
+            if (type === 'error') {
+                infoBox.className += ' bg-red-500 bg-opacity-20 text-red-100';
+            } else if (type === 'success') {
+                infoBox.className += ' bg-green-500 bg-opacity-20 text-green-100';
+            } else {
+                infoBox.className += ' bg-yellow-500 bg-opacity-20 text-yellow-100';
+            }
+            
+            infoBox.classList.remove('hidden');
+            setTimeout(() => {
+                infoBox.classList.add('hidden');
+            }, 5000);
+        }
+
+        function generateShareId() {
+            return 'audio_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        }
+
+        function updatePlayIcon(isPlaying) {
+            playIcon.className = isPlaying ? 'fa-solid fa-pause text-2xl' : 'fa-solid fa-play text-2xl ml-1';
+        }
+
+        // 生成包含音频数据的URL
+        function generateDataUrl() {
+            if (!currentAudioData) return null;
+            
+            // 对文件名进行编码
+            const encodedName = encodeURIComponent(currentFileName);
+            
+            // 提取base64数据部分（去掉data:audio/mp3;base64,前缀）
+            const base64Data = currentAudioData.split(',')[1];
+            
+            if (!base64Data) {
+                console.error('无法提取base64数据');
+                return null;
+            }
+            
+            // 创建包含音频数据的URL
+            const dataUrl = `${window.location.origin}${window.location.pathname}?audio=${encodedName}#${base64Data}`;
+            
+            return dataUrl;
+        }
+
+        // 从URL中解析音频数据
+        function parseAudioFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const audioName = urlParams.get('audio');
+            
+            if (audioName && window.location.hash) {
+                try {
+                    const base64Data = window.location.hash.substring(1); // 去掉#号
+                    const audioData = 'data:audio/mp3;base64,' + base64Data;
+                    return {
+                        name: decodeURIComponent(audioName),
+                        data: audioData
+                    };
+                } catch (e) {
+                    console.error('解析音频数据失败:', e);
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        // ========== 音频可视化 ==========
+        function setupAudioContext() {
+            if (isContextSetup) return;
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                source = audioContext.createMediaElementSource(audio);
+                source.connect(analyser);
+                analyser.connect(audioContext.destination);
+                analyser.fftSize = 256;
+                isContextSetup = true;
+                drawVisualizer();
+            } catch (e) {
+                console.log('⚠️ 可视化需要用户交互');
+            }
+        }
+
+        const canvas = document.getElementById('visualizer');
+        const canvasCtx = canvas.getContext('2d');
+        
+        function drawVisualizer() {
+            if (!analyser) return;
+            requestAnimationFrame(drawVisualizer);
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            const WIDTH = canvas.width;
+            const HEIGHT = canvas.height;
+            canvasCtx.clearRect(0, 0, WIDTH, HEIGHT);
+            const barWidth = (WIDTH / bufferLength) * 2.5;
+            let x = 0;
+            for (let i = 0; i < bufferLength; i++) {
+                const barHeight = dataArray[i] / 2;
+                canvasCtx.fillStyle = `rgba(255, 255, 255, ${dataArray[i]/255})`;
+                canvasCtx.fillRect(x, HEIGHT - barHeight, barWidth, barHeight);
+                x += barWidth + 1;
+            }
+        }
+
+        // ========== 播放控制 ==========
+        playBtn.addEventListener('click', () => {
+            setupAudioContext();
+            if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume();
+            }
+            if (audio.paused) {
+                audio.play();
+                updatePlayIcon(true);
+                albumArt.style.animationPlayState = 'running';
+            } else {
+                audio.pause();
+                updatePlayIcon(false);
+                albumArt.style.animationPlayState = 'paused';
+            }
+        });
+
+        restartBtn.addEventListener('click', () => {
+            audio.currentTime = 0;
+            if (audio.paused) {
+                audio.play();
+                updatePlayIcon(true);
+                albumArt.style.animationPlayState = 'running';
+            }
+        });
+
+        // ========== 文件上传 ==========
+        fileUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                console.log('📁 文件:', file.name, (file.size / 1024 / 1024).toFixed(2) + 'MB');
+                
+                // 限制文件大小为3MB，避免URL过长
+                if (file.size > 3 * 1024 * 1024) {
+                    showInfo('⚠️ 文件过大！建议小于3MB以确保分享正常', 'error');
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    currentAudioData = event.target.result;
+                    currentFileName = file.name.replace(/\.[^/.]+$/, "");
+                    
+                    audio.src = URL.createObjectURL(file);
+                    trackName.textContent = currentFileName;
+                    trackArtist.textContent = "本地导入";
+                    
+                    shareBtn.disabled = false;
+                    qrcodeBtn.disabled = false;
+                    
+                    audio.load();
+                    setupAudioContext();
+                    if (audioContext) audioContext.resume();
+                    
+                    audio.play()
+                        .then(() => {
+                            updatePlayIcon(true);
+                            albumArt.style.animationPlayState = 'running';
+                            showInfo('✅ 音频加载成功！可以生成分享链接了', 'success');
+                        })
+                        .catch(err => {
+                            console.error('播放失败:', err);
+                            showInfo('❌ 播放失败: ' + err.message, 'error');
+                        });
+                };
+                reader.onerror = function() {
+                    showInfo('❌ 文件读取失败', 'error');
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // ========== 进度和音量 ==========
+        audio.addEventListener('timeupdate', () => {
+            const percent = (audio.currentTime / audio.duration) * 100;
+            progress.value = percent || 0;
+            currentTimeEl.textContent = formatTime(audio.currentTime);
+            if (!isNaN(audio.duration)) {
+                durationEl.textContent = formatTime(audio.duration);
+            }
+            const val = progress.value;
+            progress.style.background = `linear-gradient(to right, #ffffff 0%, #ffffff ${val}%, rgba(255,255,255,0.3) ${val}%, rgba(255,255,255,0.3) 100%)`;
+        });
+
+        progress.addEventListener('input', (e) => {
+            audio.currentTime = (e.target.value / 100) * audio.duration;
+        });
+
+        volume.addEventListener('input', (e) => {
+            audio.volume = e.target.value;
+        });
+
+        audio.addEventListener('loadedmetadata', () => {
+            durationEl.textContent = formatTime(audio.duration);
+        });
+
+        audio.addEventListener('ended', () => {
+            updatePlayIcon(false);
+            progress.value = 0;
+            albumArt.style.animationPlayState = 'paused';
+        });
+
+        // ========== 生成分享 ==========
+        shareBtn.addEventListener('click', async () => {
+            if (!currentAudioData) {
+                showInfo('❌ 请先导入音频！', 'error');
+                return;
+            }
+
+            shareBtn.disabled = true;
+            shareBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i>生成中...';
+
+            try {
+                // 生成包含音频数据的URL
+                shareUrl = generateDataUrl();
+                
+                if (!shareUrl) {
+                    throw new Error('生成分享链接失败');
+                }
+
+                await navigator.clipboard.writeText(shareUrl);
+                shareBtn.innerHTML = '<i class="fa-solid fa-check mr-2"></i>已复制！';
+                showInfo('✅ 分享链接已复制！发送给朋友即可', 'success');
+                
+                setTimeout(() => {
+                    shareBtn.innerHTML = '<i class="fa-solid fa-share-nodes mr-2"></i>生成分享链接';
+                    shareBtn.disabled = false;
+                }, 2000);
+            } catch (error) {
+                console.error('生成失败:', error);
+                shareBtn.innerHTML = '<i class="fa-solid fa-share-nodes mr-2"></i>生成分享链接';
+                shareBtn.disabled = false;
+                showInfo('❌ 生成失败: ' + error.message, 'error');
+            }
+        });
+
+        // ========== 生成二维码 ==========
+        qrcodeBtn.addEventListener('click', async () => {
+            if (!currentAudioData) {
+                showInfo('❌ 请先导入音频！', 'error');
+                return;
+            }
+
+            qrcodeBtn.disabled = true;
+            qrcodeBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i>生成中...';
+
+            try {
+                // 生成包含音频数据的URL
+                shareUrl = generateDataUrl();
+                
+                if (!shareUrl) {
+                    throw new Error('生成分享链接失败');
+                }
+
+                // 清除之前的二维码
+                qrcodeContainer.innerHTML = '';
+                
+                // 使用try-catch包装QRCode生成
+                try {
+                    new QRCode(qrcodeContainer, {
+                        text: shareUrl,
+                        width: 256,
+                        height: 256,
+                        colorDark: "#000000",
+                        colorLight: "#ffffff",
+                        correctLevel: QRCode.CorrectLevel.H
+                    });
+                } catch (qrError) {
+                    console.error('QRCode生成错误:', qrError);
+                    throw new Error('二维码生成失败: ' + qrError.message);
+                }
+
+                shareIdDisplay.textContent = `分享文件名: ${currentFileName}`;
+                qrcodeModal.classList.remove('hidden');
+                qrcodeModal.classList.add('flex');
+                
+                qrcodeBtn.innerHTML = '<i class="fa-solid fa-qrcode mr-2"></i>生成二维码';
+                qrcodeBtn.disabled = false;
+                
+                showInfo('✅ 二维码生成成功！', 'success');
+            } catch (error) {
+                console.error('生成失败:', error);
+                qrcodeBtn.innerHTML = '<i class="fa-solid fa-qrcode mr-2"></i>生成二维码';
+                qrcodeBtn.disabled = false;
+                showInfo('❌ 生成失败: ' + error.message, 'error');
+            }
+        });
+
+        // ========== 弹窗控制 ==========
+        closeModal.addEventListener('click', () => {
+            qrcodeModal.classList.add('hidden');
+            qrcodeModal.classList.remove('flex');
+        });
+
+        qrcodeModal.addEventListener('click', (e) => {
+            if (e.target === qrcodeModal) {
+                qrcodeModal.classList.add('hidden');
+                qrcodeModal.classList.remove('flex');
+            }
+        });
+
+        copyLinkBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(shareUrl);
+                copyLinkBtn.innerHTML = '<i class="fa-solid fa-check mr-2"></i>已复制！';
+                setTimeout(() => {
+                    copyLinkBtn.innerHTML = '<i class="fa-solid fa-copy mr-2"></i>复制链接';
+                }, 2000);
+            } catch (error) {
+                showInfo('❌ 复制失败', 'error');
+            }
+        });
+
+        downloadQrBtn.addEventListener('click', () => {
+            const canvas = qrcodeContainer.querySelector('canvas');
+            if (canvas) {
+                const link = document.createElement('a');
+                link.download = `音频分享_${currentFileName}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+                showInfo('✅ 二维码已下载！', 'success');
+            } else {
+                showInfo('❌ 未找到二维码图像', 'error');
+            }
+        });
+
+        // ========== 检查分享 ==========
+        async function checkSharedAudio() {
+            const audioFromUrl = parseAudioFromUrl();
+            
+            if (audioFromUrl) {
+                console.log('🔗 检测到分享的音频:', audioFromUrl.name);
+                showInfo('⏳ 正在加载分享的音频...', 'info');
+                
+                try {
+                    // 验证音频数据
+                    if (!audioFromUrl.data.startsWith('data:audio/')) {
+                        throw new Error('音频数据格式不正确');
+                    }
+                    
+                    audio.src = audioFromUrl.data;
+                    trackName.textContent = audioFromUrl.name;
+                    trackArtist.textContent = "来自好友分享";
+                    
+                    shareBtn.disabled = false;
+                    qrcodeBtn.disabled = false;
+                    
+                    currentAudioData = audioFromUrl.data;
+                    currentFileName = audioFromUrl.name;
+                    
+                    audio.load();
+                    setupAudioContext();
+                    
+                    // 尝试自动播放
+                    audio.play().then(() => {
+                        updatePlayIcon(true);
+                        albumArt.style.animationPlayState = 'running';
+                        showInfo('✅ 音频加载成功！自动播放中', 'success');
+                    }).catch(err => {
+                        showInfo('✅ 音频加载成功！点击播放按钮开始播放', 'success');
+                    });
+                    
+                } catch (error) {
+                    console.error('加载失败:', error);
+                    showInfo('❌ 加载失败: ' + error.message, 'error');
+                }
+            }
+        }
+    </script>
+</body>
+</html>
